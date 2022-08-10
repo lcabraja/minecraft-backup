@@ -14,7 +14,7 @@ Supports servers running in [screen](https://en.wikipedia.org/wiki/GNU_Screen), 
 - Print backup status to the Minecraft chat
 ### Fork
 Features the fork adds
-- synchronize the output directory with AWS S3
+- synchronize the output directory with AWS S3 (pairs great with [this frontend](https://github.com/qoomon/aws-s3-bucket-browser))
 - communicate to the server using stdin
 
 ## Install
