@@ -7,8 +7,8 @@
 # For Minecraft servers running in a GNU screen, tmux, or RCON.
 # For most convenience, run automatically with cron.
 
-# Default Configuration 
-SCREEN_NAME="" # Name of the GNU Screen, tmux session, or hostname:port:password for RCON
+# Default Configuration
+SCREEN_NAME="" # Name of the GNU Screen, tmux session, hostname:port:password for RCON or stdin pipe
 SERVER_WORLDS=() # Server world directory
 BACKUP_DIRECTORY="" # Directory to save backups in
 MAX_BACKUPS=128 # -1 indicates unlimited
@@ -24,6 +24,7 @@ RESTIC_HOSTNAME="" # Leave empty to use system hostname
 LOCK_FILE="" # Optional lock file to acquire to ensure two backups don't run at once
 LOCK_FILE_TIMEOUT="" # Optional lock file wait timeout (in seconds)
 WINDOW_MANAGER="screen" # Choices: screen, tmux, RCON
+SYNC_BUCKET="" # Optional s3 bucket to sync to, requires aws-cli to be set up for given user
 
 # Other Variables (do not modify)
 DATE_FORMAT="%F_%H-%M-%S"
@@ -41,7 +42,7 @@ debug-log () {
   fi
 }
 
-while getopts 'a:cd:e:f:hH:i:l:m:o:p:qr:s:t:u:vw:x' FLAG; do
+while getopts 'a:cd:e:f:hH:i:l:m:o:p:qr:s:t:u:vw:y:x' FLAG; do
   case $FLAG in
     a) COMPRESSION_ALGORITHM=$OPTARG ;;
     c) ENABLE_CHAT_MESSAGES=true ;;
@@ -64,11 +65,12 @@ while getopts 'a:cd:e:f:hH:i:l:m:o:p:qr:s:t:u:vw:x' FLAG; do
        echo "-p    Prefix that shows in Minecraft chat (default: Backup)"
        echo "-q    Suppress warnings"
        echo "-r    Restic repo name (if using restic)"
-       echo "-s    Screen name, tmux session name, or hostname:port:password for RCON"
+       echo "-s    Screen name, tmux session name, hostname:port:password for RCON or stdin pipe"
        echo "-t    Enable lock file (lock file not used by default)"
        echo "-u    Lock file timeout seconds (empty = unlimited)"
        echo "-v    Verbose mode"
-       echo "-w    Window manager: screen (default), tmux, RCON"
+       echo "-w    Window manager: screen (default), tmux, RCON, stdin"
+       echo "-y    S3 bucket name to synchronize output directory to, (requires aws-cli) "
        exit 0
        ;;
     H) RESTIC_HOSTNAME=$OPTARG ;;
@@ -84,6 +86,7 @@ while getopts 'a:cd:e:f:hH:i:l:m:o:p:qr:s:t:u:vw:x' FLAG; do
     u) LOCK_FILE_TIMEOUT=$OPTARG ;;
     v) DEBUG=true ;;
     w) WINDOW_MANAGER=$OPTARG ;;
+    y) SYNC_BUCKET=$OPTARG ;;
     *) log-fatal "Invalid option -$FLAG"; exit 1 ;;
   esac
 done
@@ -121,7 +124,7 @@ rcon-command () {
     # Encode an integer as 4 bytes in little endian and return as hex
     INT="$1"
     # Source: https://stackoverflow.com/a/9955198
-    printf "%08x" "$INT" | sed -E 's/(..)(..)(..)(..)/\4\3\2\1/' 
+    printf "%08x" "$INT" | sed -E 's/(..)(..)(..)(..)/\4\3\2\1/'
   }
 
   encode () {
@@ -129,7 +132,7 @@ rcon-command () {
     TYPE="$1"
     PAYLOAD="$2"
     REQUEST_ID="$3"
-    PAYLOAD_LENGTH="${#PAYLOAD}" 
+    PAYLOAD_LENGTH="${#PAYLOAD}"
     TOTAL_LENGTH="$((4 + 4 + PAYLOAD_LENGTH + 1 + 1))"
 
     OUTPUT=""
@@ -138,8 +141,8 @@ rcon-command () {
     OUTPUT+=$(encode-int "$TYPE")
     OUTPUT+=$(echo -n "$PAYLOAD" | stream-to-hex)
     OUTPUT+="0000"
-    
-    echo -n "$OUTPUT" | hex-to-stream 
+
+    echo -n "$OUTPUT" | hex-to-stream
   }
 
   read-response () {
@@ -178,7 +181,7 @@ rcon-command () {
 
   run-command () {
     COMMAND="$1"
-    
+
     # encode 2 "$COMMAND" 13 >> "$OUT_PIPE"
     encode 2 "$COMMAND" 13 >&3
 
@@ -214,9 +217,10 @@ fi
 # Check for missing encouraged arguments
 if ! $SUPPRESS_WARNINGS; then
   if [[ "$SCREEN_NAME" == "" ]]; then
-    log-warning "Minecraft screen/tmux/rcon location not specified (use -s)"
+    log-warning "Minecraft screen/tmux/rcon/stdin location not specified (use -s)"
   fi
 fi
+
 # Check for required arguments
 MISSING_CONFIGURATION=false
 if [[ "${#SERVER_WORLDS[@]}" == "0" ]]; then
@@ -230,6 +234,10 @@ fi
 if [[ "$RESTIC_REPO" != "" ]]; then
   if [[ "$BACKUP_DIRECTORY" != "" ]]; then
     log-fatal "Both output directory (-o) and restic repo (-r) specified but only one may be used at a time"
+    MISSING_CONFIGURATION=true
+  fi
+  if [[ "$SYNC_BUCKET" != "" ]]; then
+    log-fatal "Both s3 bucket (-y) and restic repo (-r) specified but bucket may only be used with output directory"
     MISSING_CONFIGURATION=true
   fi
   if [[ $MAX_BACKUPS -ge 0 ]] && [[ $MAX_BACKUPS -lt 70 ]] && [[ $DELETE_METHOD == "thin" ]]; then
@@ -265,6 +273,8 @@ execute-command () {
       "tmux") tmux send-keys -t "$SCREEN_NAME" "$COMMAND" ENTER
         ;;
       "RCON"|"rcon") rcon-command "$SCREEN_NAME" "$COMMAND"
+        ;;
+      "stdin") echo "$COMMAND" > "$SCREEN_NAME"
         ;;
     esac
   fi
@@ -440,6 +450,12 @@ delete-old-backups () {
   fi
 }
 
+synchronize-bucket () {
+  if [[ "$SYNC_BUCKET" != "" ]]; then
+    aws s3 sync "$BACKUP_DIRECTORY" "s3://$SYNC_BUCKET" --delete
+  fi
+}
+
 clean-up () {
   # Re-enable world autosaving
   execute-command "save-on"
@@ -520,6 +536,8 @@ do-backup () {
     if [ "$ARCHIVE_EXIT_CODE" -ne 0 ]; then
       log-fatal "Archive command exited with nonzero exit code $ARCHIVE_EXIT_CODE"
     fi
+
+    synchronize-bucket
   fi
 
   if [[ "$RESTIC_REPO" != "" ]]; then

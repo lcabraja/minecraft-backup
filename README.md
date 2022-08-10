@@ -12,6 +12,10 @@ Supports servers running in [screen](https://en.wikipedia.org/wiki/GNU_Screen), 
   - "sequential" - delete oldest backup
 - Works on vanilla (no plugins required)
 - Print backup status to the Minecraft chat
+### Fork
+Features the fork adds
+- synchronize the output directory with AWS S3
+- communicate to the server using stdin
 
 ## Install
 ```bash
@@ -24,6 +28,9 @@ If using RCON, you will also need to have the [`xxd`](https://linux.die.net/man/
 
 ## Usage
 ```bash
+# If piping to stdin:
+./backup.sh -c -i /home/user/server/world -o /mnt/storage/backups -s /run/minecraft.stdin -w stdin
+
 # If connecting with RCON:
 ./backup.sh -c -i /home/user/server/world -o /mnt/storage/backups -s localhost:25575:secret -w rcon
 
@@ -64,11 +71,12 @@ Command line options:
 -p    Prefix that shows in Minecraft chat (default: Backup)
 -q    Suppress warnings
 -r    Restic repo name (if using restic)
--s    Screen name, tmux session name, or hostname:port:password for RCON
+-s    Screen name, tmux session name, hostname:port:password for RCON or stdin pipe
 -t    Enable lock file (lock file not used by default)
 -u    Lock file timeout seconds (empty = unlimited)
 -v    Verbose mode
--w    Window manager: screen (default), tmux, RCON
+-w    Window manager: screen (default), tmux, RCON, stdin
+-y    S3 bucket name to synchronize output directory to (requires aws-cli)
 ```
 
 ### Automate backups with cron
@@ -77,6 +85,12 @@ Command line options:
 ```
 00 * * * * /path/to/backup.sh -c -i /home/user/server/world -o /mnt/storage/backups -s minecraft
 ```
+### Set up S3 bucket
+To use S3 synchronization, follow these steps
+1. Create an AWS Account
+2. Create an S3 Bucket
+3. Create an IAM user with programmatic access to the bucket
+4. Install and `configure` the [AWS-CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html)
 
 ## Retrieving Backups
 Always test your backups! Backups are in the `tar` format and compressed depending on the option you choose. To restore, first decompress if necessary and then extract using tar. You may be able to do this in one command if `tar` supports your compression option, as is the case with `gzip`:
